@@ -41,7 +41,7 @@ unix-shell/
 ## Kullanılan Sistem Programlama Kavramları
 
 - **Process management**: `fork()`, `execvp()`, `waitpid()`, `_exit()`
-- **System calls / POSIX API**: `isatty`, `getpid`, `localtime_r`, `strerror`
+- **System calls / POSIX API**: `isatty`, `getpid`, `localtime_r`, `strerror`, `chdir`, `getcwd`, `getenv`, `setenv`
 - **Senkronizasyon**: `pthread_mutex_lock/unlock` (log dosyası için)
 - **Hata yönetimi**: `errno`, `perror`, log dosyasına seviye etiketli
   (`INFO`, `WARN`, `ERROR`) kayıt

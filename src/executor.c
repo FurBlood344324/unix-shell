@@ -11,6 +11,62 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 
+static int builtin_cd(char **argv)
+{
+    const char *target = NULL;
+
+    if (argv[1] == NULL || strcmp(argv[1], "~") == 0) {
+        target = getenv("HOME");
+        if (target == NULL) {
+            fprintf(stderr, "cd: HOME not set\n");
+            log_msg("ERROR", "cd: HOME not set");
+            return -1;
+        }
+    } else if (strcmp(argv[1], "-") == 0) {
+        target = getenv("OLDPWD");
+        if (target == NULL) {
+            fprintf(stderr, "cd: OLDPWD not set\n");
+            log_msg("ERROR", "cd: OLDPWD not set");
+            return -1;
+        }
+        printf("%s\n", target);
+    } else {
+        target = argv[1];
+    }
+
+    char old_cwd[4096];
+    if (getcwd(old_cwd, sizeof(old_cwd)) == NULL) {
+        perror("cd: getcwd");
+        log_msg("ERROR", "cd: getcwd failed: %s", strerror(errno));
+        return -1;
+    }
+
+    if (chdir(target) < 0) { // Change Directory
+        perror("cd");
+        log_msg("ERROR", "cd '%s' failed: %s", target, strerror(errno));
+        return -1;
+    }
+
+    log_msg("INFO", "cd '%s'", target);
+
+    if (setenv("OLDPWD", old_cwd, 1) < 0) {
+        perror("cd: setenv OLDPWD");
+        log_msg("ERROR", "cd: setenv OLDPWD failed: %s", strerror(errno));
+        return -1;
+    }
+
+    return 0;
+}
+
+int run_builtin(char **argv)
+{
+    if (strcmp(argv[0], "cd") == 0) {
+        builtin_cd(argv);
+        return 1;
+    }
+    return 0;
+}
+
 int run_external(char **argv)
 {
     pid_t pid = fork();

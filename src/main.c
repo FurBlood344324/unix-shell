@@ -6,6 +6,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 #define MAX_LINE 1024
@@ -36,6 +37,10 @@ int main(void)
         }
 
         if (parse_line(line, argv) == 0) {
+            continue;
+        }
+
+        if (run_builtin(argv)) {
             continue;
         }
 
