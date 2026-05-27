@@ -43,7 +43,7 @@ static int builtin_cd(char **argv)
         return -1;
     }
 
-    if (chdir(target) < 0) { // Change Directory
+    if (chdir(target) < 0) {
         perror("cd");
         log_msg("ERROR", "cd '%s' failed: %s", target, strerror(errno));
         return -1;
@@ -80,6 +80,25 @@ static int builtin_exit(char **argv)
     exit(code);
 }
 
+static void run_pipe_builtin(char **argv)
+{
+    if (strcmp(argv[0], "cd") == 0) {
+        builtin_cd(argv);
+        _exit(0);
+    }
+    if (strcmp(argv[0], "exit") == 0) {
+        int code = last_exit_code;
+        if (argv[1] != NULL) {
+            char *endptr;
+            long val = strtol(argv[1], &endptr, 10);
+            if (*endptr == '\0' && endptr != argv[1]) {
+                code = (int)val;
+            }
+        }
+        _exit(code);
+    }
+}
+
 int run_pipe(char **left_argv, char **right_argv)
 {
     int fd[2];
@@ -106,22 +125,7 @@ int run_pipe(char **left_argv, char **right_argv)
         }
         close(fd[1]);
 
-        if (strcmp(left_argv[0], "cd") == 0) {
-            builtin_cd(left_argv);
-            _exit(0);
-        }
-        if (strcmp(left_argv[0], "exit") == 0) {
-            int code = last_exit_code;
-            if (left_argv[1] != NULL) {
-                char *endptr;
-                long val = strtol(left_argv[1], &endptr, 10);
-                if (*endptr == '\0' && endptr != left_argv[1]) {
-                    code = (int)val;
-                }
-            }
-            _exit(code);
-        }
-
+        run_pipe_builtin(left_argv);
         execvp(left_argv[0], left_argv);
         fprintf(stderr, "shell: %s: %s\n", left_argv[0], strerror(errno));
         _exit(127);
@@ -145,22 +149,7 @@ int run_pipe(char **left_argv, char **right_argv)
         }
         close(fd[0]);
 
-        if (strcmp(right_argv[0], "cd") == 0) {
-            builtin_cd(right_argv);
-            _exit(0);
-        }
-        if (strcmp(right_argv[0], "exit") == 0) {
-            int code = last_exit_code;
-            if (right_argv[1] != NULL) {
-                char *endptr;
-                long val = strtol(right_argv[1], &endptr, 10);
-                if (*endptr == '\0' && endptr != right_argv[1]) {
-                    code = (int)val;
-                }
-            }
-            _exit(code);
-        }
-
+        run_pipe_builtin(right_argv);
         execvp(right_argv[0], right_argv);
         fprintf(stderr, "shell: %s: %s\n", right_argv[0], strerror(errno));
         _exit(127);
