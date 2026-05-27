@@ -2,3 +2,5 @@ build/
 msh
 *.o
 *.log
+CLAUDE.md
+.claude/

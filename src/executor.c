@@ -11,6 +11,8 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 
+static int last_exit_code = 0;
+
 static int builtin_cd(char **argv)
 {
     const char *target = NULL;
@@ -58,10 +60,34 @@ static int builtin_cd(char **argv)
     return 0;
 }
 
+static int builtin_exit(char **argv)
+{
+    int code = last_exit_code;
+
+    if (argv[1] != NULL) {
+        char *endptr;
+        long val = strtol(argv[1], &endptr, 10);
+        if (*endptr != '\0' || endptr == argv[1]) {
+            fprintf(stderr, "exit: %s: numeric argument required\n", argv[1]);
+            log_msg("ERROR", "exit: %s: numeric argument required", argv[1]);
+            return -1;
+        }
+        code = (int)val;
+    }
+
+    log_msg("INFO", "shell exit (code=%d)", code);
+    log_close();
+    exit(code);
+}
+
 int run_builtin(char **argv)
 {
     if (strcmp(argv[0], "cd") == 0) {
         builtin_cd(argv);
+        return 1;
+    }
+    if (strcmp(argv[0], "exit") == 0) {
+        builtin_exit(argv);
         return 1;
     }
     return 0;
@@ -91,9 +117,11 @@ int run_external(char **argv)
     }
 
     if (WIFEXITED(status)) {
+        last_exit_code = WEXITSTATUS(status);
         log_msg("INFO", "cmd='%s' child_pid=%d exit=%d",
-                argv[0], (int)pid, WEXITSTATUS(status));
+                argv[0], (int)pid, last_exit_code);
     } else if (WIFSIGNALED(status)) {
+        last_exit_code = 128 + WTERMSIG(status);
         log_msg("WARN", "cmd='%s' child_pid=%d sinyal=%d",
                 argv[0], (int)pid, WTERMSIG(status));
     }

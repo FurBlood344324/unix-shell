@@ -66,7 +66,7 @@ msh> echo merhaba dunya
 merhaba dunya
 msh> uname -a
 Linux ...
-msh>            # Ctrl-D ile çıkış
+msh> exit 3       # 3 koduyla çıkış
 ```
 
 Kapatmak için `Ctrl-D` (EOF) gönderin. Loglar `shell.log` dosyasında
@@ -85,11 +85,14 @@ Bu sürümde manuel test seti:
 | 5 | `yokboyle`     | "shell: yokboyle: No such file or directory" hatası |
 | 6 | (boş satır)    | Yeni prompt, hata yok                               |
 | 7 | `Ctrl-D`       | Shell temiz şekilde kapanır                         |
+| 8 | `exit`         | Son komutun çıkış koduyla kapanır                   |
+| 9 | `exit 4`       | 4 koduyla kapanır, `$?` = 4                         |
+| 10| `exit abc`     | "numeric argument required" hatası, shell kapanmaz   |
 
 Hızlı toplu test:
 
 ```bash
-printf 'echo merhaba\nls\nfalse\nyokboyle\n' | ./msh
+printf 'echo merhaba\nls\nfalse\nyokboyle\nexit 3\n' | ./msh
 cat shell.log
 ```
 
