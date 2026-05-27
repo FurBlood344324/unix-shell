@@ -99,6 +99,43 @@ static void run_pipe_builtin(char **argv)
     }
 }
 
+static void pipe_child(int close_fd, int dup_fd, int target_fd, char **argv)
+{
+    close(close_fd);
+    if (dup2(dup_fd, target_fd) < 0) {
+        perror("shell: dup2");
+        _exit(1);
+    }
+    close(dup_fd);
+
+    run_pipe_builtin(argv);
+    execvp(argv[0], argv);
+    fprintf(stderr, "shell: %s: %s\n", argv[0], strerror(errno));
+    _exit(127);
+}
+
+static int log_process(pid_t pid, char **argv, const char *label, int set_exit)
+{
+    int status = 0;
+    if (waitpid(pid, &status, 0) < 0) {
+        perror("shell: waitpid");
+        log_msg("ERROR", "waitpid(%d) basarisiz: %s", (int)pid, strerror(errno));
+        return -1;
+    }
+    if (WIFEXITED(status)) {
+        int code = WEXITSTATUS(status);
+        if (set_exit) last_exit_code = code;
+        log_msg("INFO", "%scmd='%s' pid=%d exit=%d",
+                label, argv[0], (int)pid, code);
+    } else if (WIFSIGNALED(status)) {
+        int sig = WTERMSIG(status);
+        if (set_exit) last_exit_code = 128 + sig;
+        log_msg("WARN", "%scmd='%s' pid=%d signal=%d",
+                label, argv[0], (int)pid, sig);
+    }
+    return 0;
+}
+
 int run_pipe(char **left_argv, char **right_argv)
 {
     int fd[2];
@@ -118,17 +155,7 @@ int run_pipe(char **left_argv, char **right_argv)
     }
 
     if (left_pid == 0) {
-        close(fd[0]);
-        if (dup2(fd[1], STDOUT_FILENO) < 0) {
-            perror("shell: dup2");
-            _exit(1);
-        }
-        close(fd[1]);
-
-        run_pipe_builtin(left_argv);
-        execvp(left_argv[0], left_argv);
-        fprintf(stderr, "shell: %s: %s\n", left_argv[0], strerror(errno));
-        _exit(127);
+        pipe_child(fd[0], fd[1], STDOUT_FILENO, left_argv);
     }
 
     pid_t right_pid = fork();
@@ -142,43 +169,14 @@ int run_pipe(char **left_argv, char **right_argv)
     }
 
     if (right_pid == 0) {
-        close(fd[1]);
-        if (dup2(fd[0], STDIN_FILENO) < 0) {
-            perror("shell: dup2");
-            _exit(1);
-        }
-        close(fd[0]);
-
-        run_pipe_builtin(right_argv);
-        execvp(right_argv[0], right_argv);
-        fprintf(stderr, "shell: %s: %s\n", right_argv[0], strerror(errno));
-        _exit(127);
+        pipe_child(fd[1], fd[0], STDIN_FILENO, right_argv);
     }
 
     close(fd[0]);
     close(fd[1]);
 
-    int left_status = 0;
-    waitpid(left_pid, &left_status, 0);
-    if (WIFEXITED(left_status)) {
-        log_msg("INFO", "pipe-left cmd='%s' pid=%d exit=%d",
-                left_argv[0], (int)left_pid, WEXITSTATUS(left_status));
-    } else if (WIFSIGNALED(left_status)) {
-        log_msg("WARN", "pipe-left cmd='%s' pid=%d signal=%d",
-                left_argv[0], (int)left_pid, WTERMSIG(left_status));
-    }
-
-    int right_status = 0;
-    waitpid(right_pid, &right_status, 0);
-    if (WIFEXITED(right_status)) {
-        last_exit_code = WEXITSTATUS(right_status);
-        log_msg("INFO", "pipe-right cmd='%s' pid=%d exit=%d",
-                right_argv[0], (int)right_pid, last_exit_code);
-    } else if (WIFSIGNALED(right_status)) {
-        last_exit_code = 128 + WTERMSIG(right_status);
-        log_msg("WARN", "pipe-right cmd='%s' pid=%d signal=%d",
-                right_argv[0], (int)right_pid, WTERMSIG(right_status));
-    }
+    log_process(left_pid, left_argv, "pipe-left: ", 0);
+    log_process(right_pid, right_argv, "pipe-right: ", 1);
 
     return 0;
 }
@@ -212,22 +210,7 @@ int run_external(char **argv)
         _exit(127);
     }
 
-    int status = 0;
-    if (waitpid(pid, &status, 0) < 0) {
-        perror("shell: waitpid");
-        log_msg("ERROR", "waitpid(%d) basarisiz: %s", (int)pid, strerror(errno));
+    if (log_process(pid, argv, "", 1) < 0)
         return -1;
-    }
-
-    if (WIFEXITED(status)) {
-        last_exit_code = WEXITSTATUS(status);
-        log_msg("INFO", "cmd='%s' child_pid=%d exit=%d",
-                argv[0], (int)pid, last_exit_code);
-    } else if (WIFSIGNALED(status)) {
-        last_exit_code = 128 + WTERMSIG(status);
-        log_msg("WARN", "cmd='%s' child_pid=%d sinyal=%d",
-                argv[0], (int)pid, WTERMSIG(status));
-    }
-
     return 0;
 }
