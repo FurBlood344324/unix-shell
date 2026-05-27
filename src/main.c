@@ -24,6 +24,8 @@ int main(void)
 
     char  line[MAX_LINE];
     char *argv[MAX_ARGS];
+    char *left_argv[MAX_ARGS];
+    char *right_argv[MAX_ARGS];
 
     for (;;) {
         if (isatty(STDIN_FILENO)) {
@@ -34,6 +36,17 @@ int main(void)
         if (fgets(line, sizeof(line), stdin) == NULL) {
             if (isatty(STDIN_FILENO)) fputc('\n', stdout);
             break;
+        }
+
+        int pres = parse_pipe(line, left_argv, right_argv);
+        if (pres == -1) {
+            fprintf(stderr, "shell: invalid pipe command\n");
+            log_msg("ERROR", "invalid pipe, missing left or right command");
+            continue;
+        }
+        if (pres == 1) {
+            run_pipe(left_argv, right_argv);
+            continue;
         }
 
         if (parse_line(line, argv) == 0) {

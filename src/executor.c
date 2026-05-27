@@ -80,6 +80,120 @@ static int builtin_exit(char **argv)
     exit(code);
 }
 
+int run_pipe(char **left_argv, char **right_argv)
+{
+    int fd[2];
+    if (pipe(fd) < 0) {
+        perror("shell: pipe");
+        log_msg("ERROR", "pipe basarisiz: %s", strerror(errno));
+        return -1;
+    }
+
+    pid_t left_pid = fork();
+    if (left_pid < 0) {
+        perror("shell: fork");
+        log_msg("ERROR", "fork basarisiz: %s", strerror(errno));
+        close(fd[0]);
+        close(fd[1]);
+        return -1;
+    }
+
+    if (left_pid == 0) {
+        close(fd[0]);
+        if (dup2(fd[1], STDOUT_FILENO) < 0) {
+            perror("shell: dup2");
+            _exit(1);
+        }
+        close(fd[1]);
+
+        if (strcmp(left_argv[0], "cd") == 0) {
+            builtin_cd(left_argv);
+            _exit(0);
+        }
+        if (strcmp(left_argv[0], "exit") == 0) {
+            int code = last_exit_code;
+            if (left_argv[1] != NULL) {
+                char *endptr;
+                long val = strtol(left_argv[1], &endptr, 10);
+                if (*endptr == '\0' && endptr != left_argv[1]) {
+                    code = (int)val;
+                }
+            }
+            _exit(code);
+        }
+
+        execvp(left_argv[0], left_argv);
+        fprintf(stderr, "shell: %s: %s\n", left_argv[0], strerror(errno));
+        _exit(127);
+    }
+
+    pid_t right_pid = fork();
+    if (right_pid < 0) {
+        perror("shell: fork");
+        log_msg("ERROR", "fork basarisiz: %s", strerror(errno));
+        close(fd[0]);
+        close(fd[1]);
+        waitpid(left_pid, NULL, 0);
+        return -1;
+    }
+
+    if (right_pid == 0) {
+        close(fd[1]);
+        if (dup2(fd[0], STDIN_FILENO) < 0) {
+            perror("shell: dup2");
+            _exit(1);
+        }
+        close(fd[0]);
+
+        if (strcmp(right_argv[0], "cd") == 0) {
+            builtin_cd(right_argv);
+            _exit(0);
+        }
+        if (strcmp(right_argv[0], "exit") == 0) {
+            int code = last_exit_code;
+            if (right_argv[1] != NULL) {
+                char *endptr;
+                long val = strtol(right_argv[1], &endptr, 10);
+                if (*endptr == '\0' && endptr != right_argv[1]) {
+                    code = (int)val;
+                }
+            }
+            _exit(code);
+        }
+
+        execvp(right_argv[0], right_argv);
+        fprintf(stderr, "shell: %s: %s\n", right_argv[0], strerror(errno));
+        _exit(127);
+    }
+
+    close(fd[0]);
+    close(fd[1]);
+
+    int left_status = 0;
+    waitpid(left_pid, &left_status, 0);
+    if (WIFEXITED(left_status)) {
+        log_msg("INFO", "pipe-left cmd='%s' pid=%d exit=%d",
+                left_argv[0], (int)left_pid, WEXITSTATUS(left_status));
+    } else if (WIFSIGNALED(left_status)) {
+        log_msg("WARN", "pipe-left cmd='%s' pid=%d signal=%d",
+                left_argv[0], (int)left_pid, WTERMSIG(left_status));
+    }
+
+    int right_status = 0;
+    waitpid(right_pid, &right_status, 0);
+    if (WIFEXITED(right_status)) {
+        last_exit_code = WEXITSTATUS(right_status);
+        log_msg("INFO", "pipe-right cmd='%s' pid=%d exit=%d",
+                right_argv[0], (int)right_pid, last_exit_code);
+    } else if (WIFSIGNALED(right_status)) {
+        last_exit_code = 128 + WTERMSIG(right_status);
+        log_msg("WARN", "pipe-right cmd='%s' pid=%d signal=%d",
+                right_argv[0], (int)right_pid, WTERMSIG(right_status));
+    }
+
+    return 0;
+}
+
 int run_builtin(char **argv)
 {
     if (strcmp(argv[0], "cd") == 0) {

@@ -1,9 +1,7 @@
 # Mini Unix Shell (msh)
 
 Bu klasör, "Mini Unix Shell" projesinin **başlangıç sürümünü** içerir.
-Şu an sadece en temel akış uygulanmıştır: kullanıcıdan komut oku → `fork` →
-`execvp` → `waitpid`. Sonraki adımlarda pipe (`|`), arka plan (`&`),
-built-in komutlar (`cd`, `exit`) ve history yapısı eklenecektir.
+Tek seviyeli pipe (`|`) ve built-in komutlar (`cd`, `exit`) eklenmiştir.
 
 ## Amaç
 
@@ -13,10 +11,13 @@ kurmak ve process yaratma + bekleme akışını sağlam bir şekilde oturtmaktı
 
 ## Tasarım
 
-- Tek dosyalı, tek thread'li bir REPL (Read-Eval-Print Loop):
+- **REPL (Read-Eval-Print Loop)**:
   1. `fgets` ile satır oku
-  2. `strtok` ile boşluğa göre tokenize et
-  3. `fork()` → çocukta `execvp()`, ebeveynde `waitpid()`
+  2. `|` varsa `parse_pipe` ile iki komuta ayır, `run_pipe` çalıştır
+  3. `strtok` ile tokenize et
+  4. Built-in (`cd`, `exit`) ise built-in çalıştır
+  5. `fork()` → çocukta `execvp()`, ebeveynde `waitpid()`
+- **Pipe**: `pipe()` + iki `fork()` + `dup2` ile tek seviyeli pipeline
 - **Loglama**: tüm olaylar `shell.log` dosyasına zaman damgalı yazılır.
   Log yazımı `pthread_mutex` ile korunur; ileride birden fazla
   thread/child aynı anda loga yazsa bile satırlar bozulmaz.
@@ -41,7 +42,7 @@ unix-shell/
 ## Kullanılan Sistem Programlama Kavramları
 
 - **Process management**: `fork()`, `execvp()`, `waitpid()`, `_exit()`
-- **System calls / POSIX API**: `isatty`, `getpid`, `localtime_r`, `strerror`, `chdir`, `getcwd`, `getenv`, `setenv`
+- **System calls / POSIX API**: `isatty`, `getpid`, `localtime_r`, `strerror`, `chdir`, `getcwd`, `getenv`, `setenv`, `pipe`, `dup2`, `close`
 - **Senkronizasyon**: `pthread_mutex_lock/unlock` (log dosyası için)
 - **Hata yönetimi**: `errno`, `perror`, log dosyasına seviye etiketli
   (`INFO`, `WARN`, `ERROR`) kayıt
@@ -66,6 +67,10 @@ msh> echo merhaba dunya
 merhaba dunya
 msh> uname -a
 Linux ...
+msh> ls | wc -l
+8
+msh> echo merhaba dunya | tr a-z A-Z
+MERHABA DUNYA
 msh> exit 3       # 3 koduyla çıkış
 ```
 
@@ -87,12 +92,18 @@ Bu sürümde manuel test seti:
 | 7 | `Ctrl-D`       | Shell temiz şekilde kapanır                         |
 | 8 | `exit`         | Son komutun çıkış koduyla kapanır                   |
 | 9 | `exit 4`       | 4 koduyla kapanır, `$?` = 4                         |
-| 10| `exit abc`     | "numeric argument required" hatası, shell kapanmaz   |
+| 10| `exit abc`     | "numeric argument required" hatasi, shell kapanmaz   |
+| 11| `ls \| wc -l`  | Dosya sayisini yazar, log'a pipe-left/pipe-right duser |
+| 12| `echo a \| tr`  | "a" harfi buyur                                      |
+| 13| `\| ls`         | "invalid pipe command" hatasi, shell kapanmaz         |
+| 14| `ls \|`         | "invalid pipe command" hatasi, shell kapanmaz         |
+| 15| `ls \| cd /tmp`  | cd pipe icinde calisir, ebeveyn dizini degismez     |
+| 16| `echo \| exit 5` | pipe icindeki exit sadece cocuk prosesi oldurur     |
 
 Hızlı toplu test:
 
 ```bash
-printf 'echo merhaba\nls\nfalse\nyokboyle\nexit 3\n' | ./msh
+printf 'echo merhaba\nls | wc -l\nls | cd /tmp\npwd\nfalse\nyokboyle\nexit 3\n' | ./msh
 cat shell.log
 ```
 
@@ -112,8 +123,8 @@ cat shell.log
 
 ## Sonraki Adımlar (TODO)
 
-- [ ] `cd` ve `exit` built-in komutları
-- [ ] Arka plan süreçleri (`&`) ve `SIGCHLD` ile reaping
-- [ ] Tek seviyeli pipe (`|`) desteği
-- [ ] Son 10 komut için history
-- [ ] Performans değerlendirmesi (komut başına süre ölçümü, ortalamalar)
+- [x] `cd` ve `exit` built-in komutlari
+- [ ] Arka plan surecleri (`&`) ve `SIGCHLD` ile reaping
+- [x] Tek seviyeli pipe (`|`) destegi
+- [ ] Son 10 komut icin history
+- [ ] Performans degerlendirmesi (komut basina sure olcumu, ortalamalar)
