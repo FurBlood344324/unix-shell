@@ -13,17 +13,59 @@
 
 static int last_exit_code = 0;
 
-static int builtin_cd(char **argv)
+static char *expand_cd_target(const char *arg)
 {
-    const char *target = NULL;
+    const char *home;
+    size_t home_len;
+    size_t suffix_len;
+    char *expanded;
 
-    if (argv[1] == NULL || strcmp(argv[1], "~") == 0) {
-        target = getenv("HOME");
-        if (target == NULL) {
+    if (arg == NULL || strcmp(arg, "~") == 0) {
+        home = getenv("HOME");
+        if (home == NULL) {
             fprintf(stderr, "cd: HOME not set\n");
             log_msg("ERROR", "cd: HOME not set");
+            return NULL;
+        }
+        return strdup(home);
+    }
+
+    if (arg[0] != '~' || arg[1] != '/') {
+        return strdup(arg);
+    }
+
+    home = getenv("HOME");
+    if (home == NULL) {
+        fprintf(stderr, "cd: HOME not set\n");
+        log_msg("ERROR", "cd: HOME not set");
+        return NULL;
+    }
+
+    home_len = strlen(home);
+    suffix_len = strlen(arg + 1);
+    expanded = malloc(home_len + suffix_len + 1);
+    if (expanded == NULL) {
+        perror("cd: malloc");
+        log_msg("ERROR", "cd: malloc failed: %s", strerror(errno));
+        return NULL;
+    }
+
+    memcpy(expanded, home, home_len);
+    memcpy(expanded + home_len, arg + 1, suffix_len + 1);
+    return expanded;
+}
+
+static int builtin_cd(char **argv)
+{
+    char *resolved_target = NULL;
+    const char *target = NULL;
+
+    if (argv[1] == NULL) {
+        resolved_target = expand_cd_target(NULL);
+        if (resolved_target == NULL) {
             return -1;
         }
+        target = resolved_target;
     } else if (strcmp(argv[1], "-") == 0) {
         target = getenv("OLDPWD");
         if (target == NULL) {
@@ -33,19 +75,25 @@ static int builtin_cd(char **argv)
         }
         printf("%s\n", target);
     } else {
-        target = argv[1];
+        resolved_target = expand_cd_target(argv[1]);
+        if (resolved_target == NULL) {
+            return -1;
+        }
+        target = resolved_target;
     }
 
     char old_cwd[4096];
     if (getcwd(old_cwd, sizeof(old_cwd)) == NULL) {
         perror("cd: getcwd");
         log_msg("ERROR", "cd: getcwd failed: %s", strerror(errno));
+        free(resolved_target);
         return -1;
     }
 
     if (chdir(target) < 0) {
         perror("cd");
         log_msg("ERROR", "cd '%s' failed: %s", target, strerror(errno));
+        free(resolved_target);
         return -1;
     }
 
@@ -54,9 +102,11 @@ static int builtin_cd(char **argv)
     if (setenv("OLDPWD", old_cwd, 1) < 0) {
         perror("cd: setenv OLDPWD");
         log_msg("ERROR", "cd: setenv OLDPWD failed: %s", strerror(errno));
+        free(resolved_target);
         return -1;
     }
 
+    free(resolved_target);
     return 0;
 }
 
