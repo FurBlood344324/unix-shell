@@ -3,7 +3,7 @@
 
 #define MAX_ARGS 64
 
-int parse_line(char *line, char **argv);
-int parse_pipe(char *line, char **left_argv, char **right_argv);
+int parse_line(char *line, char **argv, int *background);
+int parse_pipe(char *line, char **left_argv, char **right_argv, int *background);
 
 #endif

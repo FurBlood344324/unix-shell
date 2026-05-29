@@ -3,6 +3,7 @@
 #include "executor.h"
 #include "log.h"
 
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,6 +13,69 @@
 #include <sys/wait.h>
 
 static int last_exit_code = 0;
+static sigset_t sigchld_mask;
+
+#define BG_EVENT_CAPACITY 64
+
+static volatile sig_atomic_t bg_head = 0;
+static volatile sig_atomic_t bg_tail = 0;
+static volatile sig_atomic_t bg_overflow = 0;
+static volatile sig_atomic_t bg_pids[BG_EVENT_CAPACITY];
+static volatile sig_atomic_t bg_statuses[BG_EVENT_CAPACITY];
+
+static int status_to_exit_code(int status)
+{
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+    if (WIFSIGNALED(status)) {
+        return 128 + WTERMSIG(status);
+    }
+    return 1;
+}
+
+static void enqueue_bg_event(pid_t pid, int status)
+{
+    sig_atomic_t next = (bg_head + 1) % BG_EVENT_CAPACITY;
+
+    if (next == bg_tail) {
+        bg_overflow = 1;
+        return;
+    }
+
+    bg_pids[bg_head] = (sig_atomic_t)pid;
+    bg_statuses[bg_head] = (sig_atomic_t)status;
+    bg_head = next;
+}
+
+static void collect_exited_children(void)
+{
+    int saved_errno = errno;
+    int status;
+    pid_t pid;
+
+    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        enqueue_bg_event(pid, status);
+    }
+
+    errno = saved_errno;
+}
+
+static void sigchld_handler(int signo)
+{
+    (void)signo;
+    collect_exited_children();
+}
+
+static int block_sigchld(sigset_t *oldmask)
+{
+    return sigprocmask(SIG_BLOCK, &sigchld_mask, oldmask);
+}
+
+static void restore_sigmask(const sigset_t *oldmask)
+{
+    sigprocmask(SIG_SETMASK, oldmask, NULL);
+}
 
 static char *expand_cd_target(const char *arg)
 {
@@ -125,6 +189,7 @@ static int builtin_exit(char **argv)
         code = (int)val;
     }
 
+    flush_background_events();
     log_msg("INFO", "shell exit (code=%d)", code);
     log_close();
     exit(code);
@@ -149,8 +214,10 @@ static void run_pipe_builtin(char **argv)
     }
 }
 
-static void pipe_child(int close_fd, int dup_fd, int target_fd, char **argv)
+static void pipe_child(int close_fd, int dup_fd, int target_fd, char **argv,
+                       const sigset_t *oldmask)
 {
+    restore_sigmask(oldmask);
     close(close_fd);
     if (dup2(dup_fd, target_fd) < 0) {
         perror("shell: dup2");
@@ -164,9 +231,10 @@ static void pipe_child(int close_fd, int dup_fd, int target_fd, char **argv)
     _exit(127);
 }
 
-static int log_process(pid_t pid, char **argv, const char *label, int set_exit)
+static int wait_for_child(pid_t pid, char **argv, const char *label, int set_exit)
 {
     int status = 0;
+
     if (waitpid(pid, &status, 0) < 0) {
         perror("shell: waitpid");
         log_msg("ERROR", "waitpid(%d) basarisiz: %s", (int)pid, strerror(errno));
@@ -186,12 +254,64 @@ static int log_process(pid_t pid, char **argv, const char *label, int set_exit)
     return 0;
 }
 
+int install_sigchld_handler(void)
+{
+    struct sigaction sa;
+
+    sigemptyset(&sigchld_mask);
+    sigaddset(&sigchld_mask, SIGCHLD);
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = sigchld_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_NOCLDSTOP;
+
+    return sigaction(SIGCHLD, &sa, NULL);
+}
+
+void flush_background_events(void)
+{
+    sigset_t oldmask;
+
+    if (block_sigchld(&oldmask) < 0) {
+        log_msg("ERROR", "sigprocmask basarisiz: %s", strerror(errno));
+        return;
+    }
+
+    collect_exited_children();
+
+    while (bg_tail != bg_head) {
+        pid_t pid = (pid_t)bg_pids[bg_tail];
+        int status = (int)bg_statuses[bg_tail];
+        bg_tail = (bg_tail + 1) % BG_EVENT_CAPACITY;
+
+        log_msg("INFO", "bg cmd bitti pid=%d exit=%d",
+                (int)pid, status_to_exit_code(status));
+    }
+
+    if (bg_overflow) {
+        log_msg("WARN", "bg event queue doldu, bazi cikislar loglanamamis olabilir");
+        bg_overflow = 0;
+    }
+
+    restore_sigmask(&oldmask);
+}
+
 int run_pipe(char **left_argv, char **right_argv)
 {
     int fd[2];
+    sigset_t oldmask;
+
+    if (block_sigchld(&oldmask) < 0) {
+        perror("shell: sigprocmask");
+        log_msg("ERROR", "sigprocmask basarisiz: %s", strerror(errno));
+        return -1;
+    }
+
     if (pipe(fd) < 0) {
         perror("shell: pipe");
         log_msg("ERROR", "pipe basarisiz: %s", strerror(errno));
+        restore_sigmask(&oldmask);
         return -1;
     }
 
@@ -201,11 +321,12 @@ int run_pipe(char **left_argv, char **right_argv)
         log_msg("ERROR", "fork basarisiz: %s", strerror(errno));
         close(fd[0]);
         close(fd[1]);
+        restore_sigmask(&oldmask);
         return -1;
     }
 
     if (left_pid == 0) {
-        pipe_child(fd[0], fd[1], STDOUT_FILENO, left_argv);
+        pipe_child(fd[0], fd[1], STDOUT_FILENO, left_argv, &oldmask);
     }
 
     pid_t right_pid = fork();
@@ -215,52 +336,85 @@ int run_pipe(char **left_argv, char **right_argv)
         close(fd[0]);
         close(fd[1]);
         waitpid(left_pid, NULL, 0);
+        restore_sigmask(&oldmask);
         return -1;
     }
 
     if (right_pid == 0) {
-        pipe_child(fd[1], fd[0], STDIN_FILENO, right_argv);
+        pipe_child(fd[1], fd[0], STDIN_FILENO, right_argv, &oldmask);
     }
 
     close(fd[0]);
     close(fd[1]);
 
-    log_process(left_pid, left_argv, "pipe-left: ", 0);
-    log_process(right_pid, right_argv, "pipe-right: ", 1);
+    wait_for_child(left_pid, left_argv, "pipe-left: ", 0);
+    wait_for_child(right_pid, right_argv, "pipe-right: ", 1);
+    restore_sigmask(&oldmask);
 
     return 0;
 }
 
-int run_builtin(char **argv)
+int run_builtin(char **argv, int background)
 {
     if (strcmp(argv[0], "cd") == 0) {
+        if (background) {
+            fprintf(stderr, "shell: built-in commands cannot run in background\n");
+            log_msg("WARN", "background built-in reddedildi: %s", argv[0]);
+            last_exit_code = 1;
+            return 1;
+        }
         builtin_cd(argv);
         return 1;
     }
     if (strcmp(argv[0], "exit") == 0) {
+        if (background) {
+            fprintf(stderr, "shell: built-in commands cannot run in background\n");
+            log_msg("WARN", "background built-in reddedildi: %s", argv[0]);
+            last_exit_code = 1;
+            return 1;
+        }
         builtin_exit(argv);
         return 1;
     }
     return 0;
 }
 
-int run_external(char **argv)
+int run_external(char **argv, int background)
 {
+    sigset_t oldmask;
+
+    if (block_sigchld(&oldmask) < 0) {
+        perror("shell: sigprocmask");
+        log_msg("ERROR", "sigprocmask basarisiz: %s", strerror(errno));
+        return -1;
+    }
+
     pid_t pid = fork();
     if (pid < 0) {
         perror("shell: fork");
         log_msg("ERROR", "fork basarisiz: %s", strerror(errno));
+        restore_sigmask(&oldmask);
         return -1;
     }
 
     if (pid == 0) {
+        restore_sigmask(&oldmask);
         execvp(argv[0], argv);
         fprintf(stderr, "shell: %s: %s\n", argv[0], strerror(errno));
         log_msg("ERROR", "execvp '%s' basarisiz: %s", argv[0], strerror(errno));
         _exit(127);
     }
 
-    if (log_process(pid, argv, "", 1) < 0)
-        return -1;
-    return 0;
+    if (background) {
+        printf("[%d]\n", (int)pid);
+        fflush(stdout);
+        log_msg("INFO", "bg cmd baslatildi pid=%d cmd='%s'", (int)pid, argv[0]);
+        last_exit_code = 0;
+        restore_sigmask(&oldmask);
+        return 0;
+    }
+
+    int rc = wait_for_child(pid, argv, "", 1);
+    restore_sigmask(&oldmask);
+    return rc;
 }

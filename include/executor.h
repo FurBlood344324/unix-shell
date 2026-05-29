@@ -1,8 +1,10 @@
 #ifndef MSH_EXECUTOR_H
 #define MSH_EXECUTOR_H
 
-int run_builtin(char **argv);
-int run_external(char **argv);
+int install_sigchld_handler(void);
+void flush_background_events(void);
+int run_builtin(char **argv, int background);
+int run_external(char **argv, int background);
 int run_pipe(char **left_argv, char **right_argv);
 
 #endif
