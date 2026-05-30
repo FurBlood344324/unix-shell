@@ -4,7 +4,7 @@
 int install_sigchld_handler(void);
 void flush_background_events(void);
 int run_builtin(char **argv, int background);
-int run_external(char **argv, int background);
-int run_pipe(char **left_argv, char **right_argv);
+void run_external(char **argv, int background);
+void run_pipe(char **left_argv, char **right_argv);
 
 #endif

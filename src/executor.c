@@ -109,8 +109,8 @@ static char *expand_cd_target(const char *arg)
     suffix_len = strlen(arg + 1);
     expanded = malloc(home_len + suffix_len + 1);
     if (expanded == NULL) {
-        perror("cd: malloc");
-        log_msg("ERROR", "cd: malloc failed: %s", strerror(errno));
+        perror("malloc");
+        log_msg("ERROR", "malloc failed for cd expansion");
         return NULL;
     }
 
@@ -119,139 +119,33 @@ static char *expand_cd_target(const char *arg)
     return expanded;
 }
 
-static int builtin_cd(char **argv)
+int run_builtin(char **argv, int background)
 {
-    char *resolved_target = NULL;
-    const char *target = NULL;
-
-    if (argv[1] == NULL) {
-        resolved_target = expand_cd_target(NULL);
-        if (resolved_target == NULL) {
-            return -1;
-        }
-        target = resolved_target;
-    } else if (strcmp(argv[1], "-") == 0) {
-        target = getenv("OLDPWD");
-        if (target == NULL) {
-            fprintf(stderr, "cd: OLDPWD not set\n");
-            log_msg("ERROR", "cd: OLDPWD not set");
-            return -1;
-        }
-        printf("%s\n", target);
-    } else {
-        resolved_target = expand_cd_target(argv[1]);
-        if (resolved_target == NULL) {
-            return -1;
-        }
-        target = resolved_target;
-    }
-
-    char old_cwd[4096];
-    if (getcwd(old_cwd, sizeof(old_cwd)) == NULL) {
-        perror("cd: getcwd");
-        log_msg("ERROR", "cd: getcwd failed: %s", strerror(errno));
-        free(resolved_target);
+    if (background) {
         return -1;
     }
 
-    if (chdir(target) < 0) {
-        perror("cd");
-        log_msg("ERROR", "cd '%s' failed: %s", target, strerror(errno));
-        free(resolved_target);
-        return -1;
-    }
-
-    log_msg("INFO", "cd '%s'", target);
-
-    if (setenv("OLDPWD", old_cwd, 1) < 0) {
-        perror("cd: setenv OLDPWD");
-        log_msg("ERROR", "cd: setenv OLDPWD failed: %s", strerror(errno));
-        free(resolved_target);
-        return -1;
-    }
-
-    free(resolved_target);
-    return 0;
-}
-
-static int builtin_exit(char **argv)
-{
-    int code = last_exit_code;
-
-    if (argv[1] != NULL) {
-        char *endptr;
-        long val = strtol(argv[1], &endptr, 10);
-        if (*endptr != '\0' || endptr == argv[1]) {
-            fprintf(stderr, "exit: %s: numeric argument required\n", argv[1]);
-            log_msg("ERROR", "exit: %s: numeric argument required", argv[1]);
-            return -1;
-        }
-        code = (int)val;
-    }
-
-    flush_background_events();
-    log_msg("INFO", "shell exit (code=%d)", code);
-    log_close();
-    exit(code);
-}
-
-static void run_pipe_builtin(char **argv)
-{
     if (strcmp(argv[0], "cd") == 0) {
-        builtin_cd(argv);
-        _exit(0);
-    }
-    if (strcmp(argv[0], "exit") == 0) {
-        int code = last_exit_code;
-        if (argv[1] != NULL) {
-            char *endptr;
-            long val = strtol(argv[1], &endptr, 10);
-            if (*endptr == '\0' && endptr != argv[1]) {
-                code = (int)val;
-            }
+        char *target = expand_cd_target(argv[1]);
+        if (target == NULL) {
+            last_exit_code = 1;
+            return 0;
         }
-        _exit(code);
+        if (chdir(target) < 0) {
+            perror("shell");
+            last_exit_code = 1;
+        } else {
+            last_exit_code = 0;
+        }
+        free(target);
+        return 0;
     }
-}
 
-static void pipe_child(int close_fd, int dup_fd, int target_fd, char **argv,
-                       const sigset_t *oldmask)
-{
-    restore_sigmask(oldmask);
-    close(close_fd);
-    if (dup2(dup_fd, target_fd) < 0) {
-        perror("shell: dup2");
-        _exit(1);
+    if (strcmp(argv[0], "exit") == 0) {
+        exit(last_exit_code);
     }
-    close(dup_fd);
 
-    run_pipe_builtin(argv);
-    execvp(argv[0], argv);
-    fprintf(stderr, "shell: %s: %s\n", argv[0], strerror(errno));
-    _exit(127);
-}
-
-static int wait_for_child(pid_t pid, char **argv, const char *label, int set_exit)
-{
-    int status = 0;
-
-    if (waitpid(pid, &status, 0) < 0) {
-        perror("shell: waitpid");
-        log_msg("ERROR", "waitpid(%d) basarisiz: %s", (int)pid, strerror(errno));
-        return -1;
-    }
-    if (WIFEXITED(status)) {
-        int code = WEXITSTATUS(status);
-        if (set_exit) last_exit_code = code;
-        log_msg("INFO", "%scmd='%s' pid=%d exit=%d",
-                label, argv[0], (int)pid, code);
-    } else if (WIFSIGNALED(status)) {
-        int sig = WTERMSIG(status);
-        if (set_exit) last_exit_code = 128 + sig;
-        log_msg("WARN", "%scmd='%s' pid=%d signal=%d",
-                label, argv[0], (int)pid, sig);
-    }
-    return 0;
+    return -1;
 }
 
 int install_sigchld_handler(void)
@@ -261,138 +155,24 @@ int install_sigchld_handler(void)
     sigemptyset(&sigchld_mask);
     sigaddset(&sigchld_mask, SIGCHLD);
 
-    memset(&sa, 0, sizeof(sa));
     sa.sa_handler = sigchld_handler;
     sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_NOCLDSTOP;
+    sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
 
     return sigaction(SIGCHLD, &sa, NULL);
 }
 
-void flush_background_events(void)
+void run_external(char **argv, int background)
 {
     sigset_t oldmask;
+    pid_t pid;
 
-    if (block_sigchld(&oldmask) < 0) {
-        log_msg("ERROR", "sigprocmask basarisiz: %s", strerror(errno));
-        return;
-    }
+    block_sigchld(&oldmask);
+    pid = fork();
 
-    collect_exited_children();
-
-    while (bg_tail != bg_head) {
-        pid_t pid = (pid_t)bg_pids[bg_tail];
-        int status = (int)bg_statuses[bg_tail];
-        bg_tail = (bg_tail + 1) % BG_EVENT_CAPACITY;
-
-        log_msg("INFO", "bg cmd bitti pid=%d exit=%d",
-                (int)pid, status_to_exit_code(status));
-    }
-
-    if (bg_overflow) {
-        log_msg("WARN", "bg event queue doldu, bazi cikislar loglanamamis olabilir");
-        bg_overflow = 0;
-    }
-
-    restore_sigmask(&oldmask);
-}
-
-int run_pipe(char **left_argv, char **right_argv)
-{
-    int fd[2];
-    sigset_t oldmask;
-
-    if (block_sigchld(&oldmask) < 0) {
-        perror("shell: sigprocmask");
-        log_msg("ERROR", "sigprocmask basarisiz: %s", strerror(errno));
-        return -1;
-    }
-
-    if (pipe(fd) < 0) {
-        perror("shell: pipe");
-        log_msg("ERROR", "pipe basarisiz: %s", strerror(errno));
-        restore_sigmask(&oldmask);
-        return -1;
-    }
-
-    pid_t left_pid = fork();
-    if (left_pid < 0) {
-        perror("shell: fork");
-        log_msg("ERROR", "fork basarisiz: %s", strerror(errno));
-        close(fd[0]);
-        close(fd[1]);
-        restore_sigmask(&oldmask);
-        return -1;
-    }
-
-    if (left_pid == 0) {
-        pipe_child(fd[0], fd[1], STDOUT_FILENO, left_argv, &oldmask);
-    }
-
-    pid_t right_pid = fork();
-    if (right_pid < 0) {
-        perror("shell: fork");
-        log_msg("ERROR", "fork basarisiz: %s", strerror(errno));
-        close(fd[0]);
-        close(fd[1]);
-        waitpid(left_pid, NULL, 0);
-        restore_sigmask(&oldmask);
-        return -1;
-    }
-
-    if (right_pid == 0) {
-        pipe_child(fd[1], fd[0], STDIN_FILENO, right_argv, &oldmask);
-    }
-
-    close(fd[0]);
-    close(fd[1]);
-
-    wait_for_child(left_pid, left_argv, "pipe-left: ", 0);
-    wait_for_child(right_pid, right_argv, "pipe-right: ", 1);
-    restore_sigmask(&oldmask);
-
-    return 0;
-}
-
-int run_builtin(char **argv, int background)
-{
-    if (strcmp(argv[0], "cd") == 0) {
-        if (background) {
-            fprintf(stderr, "shell: built-in commands cannot run in background\n");
-            log_msg("WARN", "background built-in reddedildi: %s", argv[0]);
-            last_exit_code = 1;
-            return 1;
-        }
-        builtin_cd(argv);
-        return 1;
-    }
-    if (strcmp(argv[0], "exit") == 0) {
-        if (background) {
-            fprintf(stderr, "shell: built-in commands cannot run in background\n");
-            log_msg("WARN", "background built-in reddedildi: %s", argv[0]);
-            last_exit_code = 1;
-            return 1;
-        }
-        builtin_exit(argv);
-        return 1;
-    }
-    return 0;
-}
-
-int run_external(char **argv, int background)
-{
-    sigset_t oldmask;
-
-    if (block_sigchld(&oldmask) < 0) {
-        perror("shell: sigprocmask");
-        log_msg("ERROR", "sigprocmask basarisiz: %s", strerror(errno));
-        return -1;
-    }
-
-    pid_t pid = fork();
     if (pid < 0) {
-        perror("shell: fork");
-        log_msg("ERROR", "fork basarisiz: %s", strerror(errno));
+        perror("shell");
+        log_msg("ERROR", "fork failed");
         restore_sigmask(&oldmask);
         return -1;
     }
@@ -400,21 +180,150 @@ int run_external(char **argv, int background)
     if (pid == 0) {
         restore_sigmask(&oldmask);
         execvp(argv[0], argv);
-        fprintf(stderr, "shell: %s: %s\n", argv[0], strerror(errno));
-        log_msg("ERROR", "execvp '%s' basarisiz: %s", argv[0], strerror(errno));
+        perror("shell");
+        log_msg("ERROR", "execvp failed");
         _exit(127);
     }
 
     if (background) {
-        printf("[%d]\n", (int)pid);
-        fflush(stdout);
-        log_msg("INFO", "bg cmd baslatildi pid=%d cmd='%s'", (int)pid, argv[0]);
+        char log_buf[64];
+        snprintf(log_buf, sizeof(log_buf), "background process started: %d", pid);
+        log_msg("INFO", log_buf);
         last_exit_code = 0;
-        restore_sigmask(&oldmask);
-        return 0;
+    } else {
+        int status;
+        if (waitpid(pid, &status, 0) < 0) {
+            perror("shell");
+            log_msg("ERROR", "waitpid failed");
+        } else {
+            last_exit_code = status_to_exit_code(status);
+        }
     }
 
-    int rc = wait_for_child(pid, argv, "", 1);
     restore_sigmask(&oldmask);
-    return rc;
+    return 0;
 }
+
+void run_pipe(char **left_argv, char **right_argv)
+{
+    int pipefd[2];
+    pid_t left_pid, right_pid;
+    sigset_t oldmask;
+
+    if (pipe(pipefd) < 0) {
+        perror("shell");
+        log_msg("ERROR", "pipe failed");
+        return -1;
+    }
+
+    block_sigchld(&oldmask);
+    left_pid = fork();
+
+    if (left_pid < 0) {
+        perror("shell");
+        log_msg("ERROR", "fork failed for left pipe child");
+        close(pipefd[0]);
+        close(pipefd[1]);
+        restore_sigmask(&oldmask);
+        return -1;
+    }
+
+    if (left_pid == 0) {
+        restore_sigmask(&oldmask);
+        close(pipefd[0]);
+        if (dup2(pipefd[1], STDOUT_FILENO) < 0) {
+            perror("shell");
+            log_msg("ERROR", "dup2 failed for left pipe child");
+            _exit(1);
+        }
+        close(pipefd[1]);
+
+        if (run_builtin(left_argv, 0) < 0) {
+            execvp(left_argv[0], left_argv);
+            perror("shell");
+            log_msg("ERROR", "execvp failed for left pipe child");
+            _exit(127);
+        }
+        _exit(last_exit_code);
+    }
+
+    right_pid = fork();
+
+    if (right_pid < 0) {
+        perror("shell");
+        log_msg("ERROR", "fork failed for right pipe child");
+        close(pipefd[0]);
+        close(pipefd[1]);
+        kill(left_pid, SIGKILL);
+        waitpid(left_pid, NULL, 0);
+        restore_sigmask(&oldmask);
+        return -1;
+    }
+
+    if (right_pid == 0) {
+        restore_sigmask(&oldmask);
+        close(pipefd[1]);
+        if (dup2(pipefd[0], STDIN_FILENO) < 0) {
+            perror("shell");
+            log_msg("ERROR", "dup2 failed for right pipe child");
+            _exit(1);
+        }
+        close(pipefd[0]);
+
+        if (run_builtin(right_argv, 0) < 0) {
+            execvp(right_argv[0], right_argv);
+            perror("shell");
+            log_msg("ERROR", "execvp failed for right pipe child");
+            _exit(127);
+        }
+        _exit(last_exit_code);
+    }
+
+    close(pipefd[0]);
+    close(pipefd[1]);
+
+    int left_status, right_status;
+    if (waitpid(left_pid, &left_status, 0) < 0) {
+        perror("shell");
+        log_msg("ERROR", "waitpid failed for left pipe child");
+    }
+    if (waitpid(right_pid, &right_status, 0) < 0) {
+        perror("shell");
+        log_msg("ERROR", "waitpid failed for right pipe child");
+    }
+
+    last_exit_code = status_to_exit_code(right_status);
+    restore_sigmask(&oldmask);
+    return 0;
+}
+
+void check_background_processes(void)
+{
+    sigset_t oldmask;
+    block_sigchld(&oldmask);
+
+    if (bg_overflow) {
+        log_msg("WARN", "background event queue overflowed");
+        bg_overflow = 0;
+    }
+
+    while (bg_tail != bg_head) {
+        pid_t pid = (pid_t)bg_pids[bg_tail];
+        int status = (int)bg_statuses[bg_tail];
+        bg_tail = (bg_tail + 1) % BG_EVENT_CAPACITY;
+
+        char log_buf[128];
+        snprintf(log_buf, sizeof(log_buf),
+                 "background process %d exited with code %d",
+                 pid, status_to_exit_code(status));
+        log_msg("INFO", log_buf);
+    }
+
+    restore_sigmask(&oldmask);
+}
+
+int get_last_exit_code(void)
+{
+    return last_exit_code;
+}
+
