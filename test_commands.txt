@@ -1,0 +1,19 @@
+echo merhaba
+pwd
+cd /tmp
+pwd
+cd
+pwd
+cd ~/Desktop
+pwd
+yokboyle
+false
+
+ls | wc -l
+| ls
+ls |
+cd /tmp &
+sleep 1 &
+ls | cat &
+history
+exit

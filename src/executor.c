@@ -122,6 +122,42 @@ static char *expand_cd_target(const char *arg)
     return expanded;
 }
 
+static void pipe_child(int close_fd, int dup_fd, int target_fd, char **argv)
+{
+    sigset_t empty;
+
+    sigemptyset(&empty);
+    sigprocmask(SIG_SETMASK, &empty, NULL);
+
+    close(close_fd);
+    if (dup2(dup_fd, target_fd) < 0) {
+        perror("shell");
+        _exit(1);
+    }
+    close(dup_fd);
+
+    if (run_builtin(argv, 0) < 0) {
+        execvp(argv[0], argv);
+        perror("shell");
+        _exit(127);
+    }
+    _exit(last_exit_code);
+}
+
+static int wait_for_child(pid_t pid, int set_exit)
+{
+    int status;
+
+    if (waitpid(pid, &status, 0) < 0) {
+        perror("shell");
+        log_msg("ERROR", "waitpid failed");
+        return -1;
+    }
+    if (set_exit)
+        last_exit_code = status_to_exit_code(status);
+    return 0;
+}
+
 int run_builtin(char **argv, int background)
 {
     if (strcmp(argv[0], "exit") == 0) {
@@ -260,22 +296,7 @@ void run_pipe(char **left_argv, char **right_argv)
     }
 
     if (left_pid == 0) {
-        restore_sigmask(&oldmask);
-        close(pipefd[0]);
-        if (dup2(pipefd[1], STDOUT_FILENO) < 0) {
-            perror("shell");
-            log_msg("ERROR", "dup2 failed for left pipe child");
-            _exit(1);
-        }
-        close(pipefd[1]);
-
-        if (run_builtin(left_argv, 0) < 0) {
-            execvp(left_argv[0], left_argv);
-            perror("shell");
-            log_msg("ERROR", "execvp failed for left pipe child");
-            _exit(127);
-        }
-        _exit(last_exit_code);
+        pipe_child(pipefd[0], pipefd[1], STDOUT_FILENO, left_argv);
     }
 
     right_pid = fork();
@@ -292,38 +313,15 @@ void run_pipe(char **left_argv, char **right_argv)
     }
 
     if (right_pid == 0) {
-        restore_sigmask(&oldmask);
-        close(pipefd[1]);
-        if (dup2(pipefd[0], STDIN_FILENO) < 0) {
-            perror("shell");
-            log_msg("ERROR", "dup2 failed for right pipe child");
-            _exit(1);
-        }
-        close(pipefd[0]);
-
-        if (run_builtin(right_argv, 0) < 0) {
-            execvp(right_argv[0], right_argv);
-            perror("shell");
-            log_msg("ERROR", "execvp failed for right pipe child");
-            _exit(127);
-        }
-        _exit(last_exit_code);
+        pipe_child(pipefd[1], pipefd[0], STDIN_FILENO, right_argv);
     }
 
     close(pipefd[0]);
     close(pipefd[1]);
 
-    int left_status, right_status;
-    if (waitpid(left_pid, &left_status, 0) < 0) {
-        perror("shell");
-        log_msg("ERROR", "waitpid failed for left pipe child");
-    }
-    if (waitpid(right_pid, &right_status, 0) < 0) {
-        perror("shell");
-        log_msg("ERROR", "waitpid failed for right pipe child");
-    }
+    wait_for_child(left_pid, 0);
+    wait_for_child(right_pid, 1);
 
-    last_exit_code = status_to_exit_code(right_status);
     restore_sigmask(&oldmask);
 }
 
