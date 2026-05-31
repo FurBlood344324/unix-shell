@@ -26,4 +26,4 @@ run: $(TARGET)
 	./$(TARGET)
 
 clean:
-	rm -rf $(OBJDIR) $(TARGET) shell.log history.txt
+	rm -rf $(OBJDIR) $(TARGET) shell.log history.txt performance.txt

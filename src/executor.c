@@ -2,6 +2,7 @@
 
 #include "executor.h"
 #include "log.h"
+#include "history.h"
 
 #include <signal.h>
 #include <stdio.h>
@@ -13,6 +14,8 @@
 #include <sys/wait.h>
 
 static int last_exit_code = 0;
+static int should_exit = 0;
+static int exit_code = 0;
 static sigset_t sigchld_mask;
 
 #define BG_EVENT_CAPACITY 64
@@ -121,18 +124,40 @@ static char *expand_cd_target(const char *arg)
 
 int run_builtin(char **argv, int background)
 {
-    if (background) {
-        return -1;
+    if (strcmp(argv[0], "exit") == 0) {
+        if (background) {
+            fprintf(stderr, "msh: exit: cannot be run in background\n");
+            return 0;
+        }
+        if (argv[1] != NULL) {
+            char *endptr;
+            long val = strtol(argv[1], &endptr, 10);
+            if (*endptr != '\0' || val < 0 || val > 255) {
+                fprintf(stderr, "exit: numeric argument required\n");
+                last_exit_code = 2;
+                return 0;
+            }
+            exit_code = (int)val;
+        } else {
+            exit_code = last_exit_code;
+        }
+        should_exit = 1;
+        return 0;
     }
 
     if (strcmp(argv[0], "cd") == 0) {
+        if (background) {
+            fprintf(stderr, "msh: cd: cannot be run in background\n");
+            last_exit_code = 1;
+            return 0;
+        }
         char *target = expand_cd_target(argv[1]);
         if (target == NULL) {
             last_exit_code = 1;
             return 0;
         }
         if (chdir(target) < 0) {
-            perror("shell");
+            perror("cd");
             last_exit_code = 1;
         } else {
             last_exit_code = 0;
@@ -141,8 +166,15 @@ int run_builtin(char **argv, int background)
         return 0;
     }
 
-    if (strcmp(argv[0], "exit") == 0) {
-        exit(last_exit_code);
+    if (strcmp(argv[0], "history") == 0) {
+        if (background) {
+            fprintf(stderr, "msh: history: cannot be run in background\n");
+            last_exit_code = 1;
+            return 0;
+        }
+        history_print();
+        last_exit_code = 0;
+        return 0;
     }
 
     return -1;
@@ -174,7 +206,7 @@ void run_external(char **argv, int background)
         perror("shell");
         log_msg("ERROR", "fork failed");
         restore_sigmask(&oldmask);
-        return -1;
+        return;
     }
 
     if (pid == 0) {
@@ -201,7 +233,6 @@ void run_external(char **argv, int background)
     }
 
     restore_sigmask(&oldmask);
-    return 0;
 }
 
 void run_pipe(char **left_argv, char **right_argv)
@@ -213,7 +244,7 @@ void run_pipe(char **left_argv, char **right_argv)
     if (pipe(pipefd) < 0) {
         perror("shell");
         log_msg("ERROR", "pipe failed");
-        return -1;
+        return;
     }
 
     block_sigchld(&oldmask);
@@ -225,7 +256,7 @@ void run_pipe(char **left_argv, char **right_argv)
         close(pipefd[0]);
         close(pipefd[1]);
         restore_sigmask(&oldmask);
-        return -1;
+        return;
     }
 
     if (left_pid == 0) {
@@ -257,7 +288,7 @@ void run_pipe(char **left_argv, char **right_argv)
         kill(left_pid, SIGKILL);
         waitpid(left_pid, NULL, 0);
         restore_sigmask(&oldmask);
-        return -1;
+        return;
     }
 
     if (right_pid == 0) {
@@ -294,10 +325,9 @@ void run_pipe(char **left_argv, char **right_argv)
 
     last_exit_code = status_to_exit_code(right_status);
     restore_sigmask(&oldmask);
-    return 0;
 }
 
-void check_background_processes(void)
+void flush_background_events(void)
 {
     sigset_t oldmask;
     block_sigchld(&oldmask);
@@ -327,3 +357,12 @@ int get_last_exit_code(void)
     return last_exit_code;
 }
 
+int get_should_exit(void)
+{
+    return should_exit;
+}
+
+int get_exit_code(void)
+{
+    return exit_code;
+}

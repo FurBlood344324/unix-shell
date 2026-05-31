@@ -1,12 +1,11 @@
 #ifndef MSH_HISTORY_H
 #define MSH_HISTORY_H
 
-void history_init(void);
-
-void history_destroy(void);
-
-void history_add(const char *command);
-
-void history_print(void);
+char *readline(const char *prompt);
+void  history_add(const char *line);
+void  history_print(void);
+void  history_load(const char *filename);
+void  history_save(const char *filename);
+void  history_destroy(void);
 
 #endif

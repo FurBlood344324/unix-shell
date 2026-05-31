@@ -1,40 +1,37 @@
 # Mini Unix Shell (msh)
 
-Bu klasör, "Mini Unix Shell" projesinin **başlangıç sürümünü** içerir.
-Tek seviyeli pipe (`|`), built-in komutlar (`cd`, `exit`) ve temel
-arka plan süreçleri (`&`) eklenmiştir.
-
 ## Amaç
 
-POSIX/Linux sistem çağrıları kullanarak komutları yorumlayıp çalıştıran
-mini bir kabuk geliştirmek. Bu ilk sürümün amacı, projenin iskeletini
-kurmak ve process yaratma + bekleme akışını sağlam bir şekilde oturtmaktır.
+Bu proje, POSIX/Linux sistem çağrıları kullanarak komutları yorumlayıp çalıştıran
+mini bir kabuk (shell) geliştirmeyi amaçlar.
 
 ## Tasarım
 
 - **REPL (Read-Eval-Print Loop)**:
-  1. `fgets` ile satır oku
-  2. `|` varsa `parse_pipe` ile iki komuta ayır, `run_pipe` çalıştır
-  3. `strtok` ile tokenize et; son token `&` ise argv'den çıkar ve
+  1. `readline` (history.c) ile ham terminal modunda satır oku; ok tuşlarıyla
+     geçmiş gezintisi, temel satır düzenleme (Ctrl-A/E/U/W, backspace, delete)
+  2. `strtok` ile tokenize et; son token `&` ise argv'den çıkar ve
      komutu background olarak işaretle
-  4. Built-in (`cd`, `exit`) ise built-in çalıştır
+  3. `|` karakteri için `parse_pipe` ile komut ikiye ayrılıp `run_pipe` çalıştırılır
+  4. Built-in (`cd`, `exit`, `history`) ise `run_builtin` çalıştırılır
   5. Foreground komutta `fork()` → çocukta `execvp()`, ebeveynde `waitpid()`
-  6. Background komutta ebeveyn `waitpid()` yapmaz; sadece `[pid]`
-     yazdırıp prompt'a döner
+  6. Background komutta ebeveyn `waitpid()` yapmaz; sadece PID'yi log'a yazıp
+     prompt'a döner
 - **Pipe**: `pipe()` + iki `fork()` + `dup2` ile tek seviyeli pipeline
 - **Background akışı ve `SIGCHLD`**:
   1. `SIGCHLD`, `sigaction()` ile kurulmuş handler'a düşer
   2. Handler içinde yalnızca `waitpid(-1, &st, WNOHANG)` çağrısı ile
      biten çocuklar reap edilir ve sonuçlar sabit boyutlu kuyruğa bırakılır
-  3. Ana döngü `flush_background_events()` ile bu kuyruğu boşaltır ve
-     log'a `bg cmd bitti pid=N exit=K` satırını yazar
+  3. `flush_background_events()` bu kuyruğu boşaltır ve
+     log'a çıkış koduyla birlikte süreç tamamlanma satırını yazar
   4. Foreground `waitpid()` ile yarış olmaması için foreground komutlarda
      ebeveyn, `SIGCHLD`'yi `sigprocmask()` ile geçici olarak maskeler
 - **Loglama**: tüm olaylar `shell.log` dosyasına zaman damgalı yazılır.
   Log yazımı `pthread_mutex` ile korunur; ileride birden fazla
   thread/child aynı anda loga yazsa bile satırlar bozulmaz.
-- **History**: Girilen komutlar halka bir tamponda (ring buffer) tutulur.
-  `history` komutu ile listelenir.
+- **History**: Girilen komutlar halka bir tamponda (ring buffer, kapasite 10) tutulur.
+  `history` komutu ile listelenir. Ok tuşları ile geçmişte gezinilebilir.
+  Geçmiş `history.txt` dosyasına kaydedilir ve başlangıçta geri yüklenir.
 
 Dosya yapısı:
 
@@ -43,25 +40,27 @@ unix-shell/
 ├── Makefile
 ├── README.md
 ├── include/
+│   ├── executor.h
 │   ├── history.h
 │   ├── log.h
 │   ├── parser.h
-│   └── executor.h
+│   └── performance.h
 └── src/
-    ├── history.c    # komut geçmişi yönetimi
-    ├── main.c       # REPL döngüsü
-    ├── log.c        # zaman damgalı, mutex'li log dosyası yazımı
-    ├── parser.c     # komut satırını argv dizisine ayırma
-    └── executor.c   # fork + execvp + waitpid + SIGCHLD/reaping akışı
+    ├── main.c         # REPL döngüsü
+    ├── executor.c     # fork + execvp + waitpid + pipe + SIGCHLD/reaping akışı
+    ├── parser.c       # komut satırını argv dizisine ayırma
+    ├── log.c          # zaman damgalı, mutex'li log dosyası yazımı
+    ├── history.c      # readline + komut geçmişi (ring buffer, ham terminal)
+    └── performance.c  # komut başına süre ölçümü ve özet
 ```
 
 ## Kullanılan Sistem Programlama Kavramları
 
 - **Process management**: `fork()`, `execvp()`, `waitpid()`, `_exit()`
-- **System calls / POSIX API**: `isatty`, `getpid`, `localtime_r`, `strerror`, `chdir`, `getcwd`, `getenv`, `setenv`, `pipe`, `dup2`, `close`, `sigaction`, `sigprocmask`
+- **System calls / POSIX API**: `isatty`, `getpid`, `localtime_r`, `strerror`, `chdir`, `getcwd`, `getenv`, `pipe`, `dup2`, `close`, `sigaction`, `sigprocmask`, `clock_gettime`
 - **Senkronizasyon**: `pthread_mutex_lock/unlock` (log dosyası için)
 - **Hata yönetimi**: `errno`, `perror`, log dosyasına seviye etiketli
-  (`INFO`, `WARN`, `ERROR`) kayıt
+  (`INFO`, `WARN`, `ERROR`, `PERF`) kayıt
 
 ## Çalıştırma Adımları
 
@@ -78,7 +77,7 @@ make run
 ```
 $ ./msh
 msh> ls
-Makefile  README.md  shell.c
+Makefile  README.md  build  include  msh  shell.log  src
 msh> echo merhaba dunya
 merhaba dunya
 msh> uname -a
@@ -86,11 +85,18 @@ Linux ...
 msh> ls | wc -l
 8
 msh> sleep 5 &
-[12345]
 msh> echo prompt geri geldi
 prompt geri geldi
 msh> echo merhaba dunya | tr a-z A-Z
 MERHABA DUNYA
+msh> history
+1: ls
+2: echo merhaba dunya
+3: uname -a
+4: ls | wc -l
+5: sleep 5 &
+6: echo prompt geri geldi
+7: echo merhaba dunya | tr a-z A-Z
 msh> exit 3       # 3 koduyla çıkış
 ```
 
@@ -99,65 +105,37 @@ birikir; sıfırlamak için `make clean` yeterlidir.
 
 ## Testler
 
-Bu sürümde manuel test seti:
-
-| # | Komut          | Beklenen davranış                                  |
-|---|----------------|----------------------------------------------------|
-| 1 | `ls`           | `.` dizinini listeler                              |
-| 2 | `ls -l /`      | Kök dizini uzun formatta listeler                  |
-| 3 | `cd /tmp`      | `/tmp` dizinine geçer, prompt değişmez             |
-| 4 | `pwd`          | `/tmp` basar                                       |
-| 5 | `cd`           | `HOME` dizinine döner                              |
-| 6 | `cd ~`         | `HOME` dizinine döner                              |
-| 7 | `cd -`         | Önceki dizine döner (`/tmp`)                       |
-| 8 | `ls | wc -l`   | `ls` çıktısındaki satır sayısını basar             |
-| 9 | `sleep 3 &`    | Arka plana atar, `[pid]` basar, prompt döner       |
-| 10| `history`      | Son 10 komutu numaralı olarak listeler             |
-| 11| `exit`         | Kabuktan çıkar                                     |
-| 12| `exit 123`     | Kabuktan 123 koduyla çıkar                         |
-
-## Performans
-
-`msh`, çalıştırılan her komutun başlangıç ve bitiş zamanını `clock_gettime(CLOCK_MONOTONIC)` kullanarak ölçer. Bu süre milisaniye (ms) cinsinden `shell.log` dosyasına kaydedilir.
-
-Kabuk kapatıldığında (veya `history` komutu çalıştırıldığında), çalıştırılan komutların sayısı, ortalama, minimum ve maksimum çalışma süreleri gibi istatistiksel bir özet ekrana basılır.
-
-Örnek çıktı:
-
-```
---- Performans Özeti ---
-Calistirilan komut sayisi: 3
-Ortalama calisma suresi: 10.87 ms
-Minimum calisma suresi: 1.12 ms
-Maksimum calisma suresi: 30.45 ms
-------------------------
-```
-|---|----------------|-----------------------------------------------------|
-| 1 | `ls`           | Dizin listelenir, log'a `exit=0` düşer              |
-| 2 | `echo selam`   | "selam" yazılır                                     |
-| 3 | `pwd`          | Çalışılan dizin yazılır                             |
-| 4 | `false`        | Çıkış kodu 1, log'a `exit=1` düşer                  |
-| 5 | `yokboyle`     | "shell: yokboyle: No such file or directory" hatası |
-| 6 | (boş satır)    | Yeni prompt, hata yok                               |
-| 7 | `Ctrl-D`       | Shell temiz şekilde kapanır                         |
-| 8 | `exit`         | Son komutun çıkış koduyla kapanır                   |
-| 9 | `exit 4`       | 4 koduyla kapanır, `$?` = 4                         |
-| 10| `exit abc`     | "numeric argument required" hatasi, shell kapanmaz   |
-| 11| `ls \| wc -l`  | Dosya sayisini yazar, log'a pipe-left/pipe-right duser |
-| 12| `echo a \| tr`  | "a" harfi buyur                                      |
-| 13| `\| ls`         | "invalid pipe command" hatasi, shell kapanmaz         |
-| 14| `ls \|`         | "invalid pipe command" hatasi, shell kapanmaz         |
-| 15| `ls \| cd /tmp`  | cd pipe icinde calisir, ebeveyn dizini degismez     |
-| 16| `echo \| exit 5` | pipe icindeki exit sadece cocuk prosesi oldurur     |
-| 17| `sleep 1 &`      | Prompt hemen doner, `[pid]` yazilir                 |
-| 18| `sleep 1 &` + log| Bitince log'a `bg cmd bitti pid=N exit=0` duser    |
-| 19| `ps -o stat= -p N` | Proses bitince `Z` gorulmez, zombie kalmaz        |
-| 20| `cd /tmp &`      | Built-in background reddedilir, shell calismaya devam eder |
+| #  | Komut              | Beklenen davranış                                                |
+|----|--------------------|------------------------------------------------------------------|
+| 1  | `ls`               | `.` dizinini listeler                                            |
+| 2  | `ls -l /`          | Kök dizini uzun formatta listeler                                |
+| 3  | `echo selam`       | "selam" yazılır                                                  |
+| 4  | `pwd`              | Çalışılan dizin yazılır                                          |
+| 5  | `false`            | Çıkış kodu 1, log'a `exit=1` düşer                               |
+| 6  | `yokboyle`         | `shell: No such file or directory` hatası                        |
+| 7  | `cd /tmp`          | `/tmp` dizinine geçer, prompt değişmez                           |
+| 8  | `cd`               | `HOME` dizinine döner                                            |
+| 9  | `cd ~`             | `HOME` dizinine döner                                            |
+| 10 | `cd ~/Desktop`     | `HOME/Desktop` dizinine geçer                                    |
+| 11 | `ls \| wc -l`      | `ls` çıktısındaki satır sayısını basar                           |
+| 12 | `echo a \| tr`     | "a" harfini basar                                                |
+| 13 | `\| ls`             | `shell: komut parse edilemedi` hatası, shell kapanmaz            |
+| 14 | `ls \|`             | `shell: komut parse edilemedi` hatası, shell kapanmaz            |
+| 15 | `ls \| cd /tmp`    | cd pipe içinde çalışır, ebeveyn dizini değişmez                  |
+| 16 | `echo \| exit 5`   | pipe içindeki exit sadece çocuk prosesi öldürür                  |
+| 17 | `sleep 3 &`        | Arka plana atar, prompt hemen döner                              |
+| 18 | `sleep 1 &` + log  | Bitince log'a `background process N exited with code 0` düşer    |
+| 19 | `cd /tmp &`        | Built-in background reddedilir, shell çalışmaya devam eder       |
+| 20 | `history`          | Son 10 komutu numaralı olarak listeler                           |
+| 21 | `exit`             | Son komutun çıkış koduyla kapanır                                |
+| 22 | `exit 123`         | 123 koduyla kapanır                                              |
+| 23 | `exit abc`         | "numeric argument required" hatası, shell kapanmaz               |
+| 24 | (boş satır)        | Yeni prompt, hata yok                                           |
 
 Hızlı toplu test:
 
 ```bash
-printf 'echo merhaba\nsleep 1 &\nls | wc -l\nfalse\nexit 3\n' | ./msh
+./msh < test_commands.txt; echo "Cikis: $?"
 cat shell.log
 ```
 
@@ -169,20 +147,10 @@ cat shell.log
   `_exit` tercih edildi).
 - **Log satırlarının karışması**: Tek thread'de sorun değil ama
   ileride pipeline / arka plan komutları eklenince birden fazla
-  süreç aynı `FILE*`'ye yazacak. Şimdilik `pthread_mutex` ile süreç
-  içinden korunuyor, sonraki adımda `flock`/`O_APPEND` davranışı
-  da değerlendirilecek.
+  süreç aynı `FILE*`'ye yazacak. Şimdilik `pthread_mutex` ile korunuyor.
 - **`SIGCHLD` içinde güvenli işlem**: Handler içinde `printf` veya
   `log_msg` çağırmak async-signal-safe değil. Bu yüzden handler sadece
   reaping yapıyor; log yazımı ve kullanıcıya görünür yan etkiler ana
-  döngüde tamamlanıyor.
+  döngüde (`flush_background_events`) tamamlanıyor.
 - **Boş satır / sadece boşluk**: `parse_line` 0 dönerse `fork`'a hiç
   girilmiyor; aksi halde her enter'da gereksiz process açılırdı.
-
-## Sonraki Adımlar (TODO)
-
-- [x] `cd` ve `exit` built-in komutlari
-- [x] Arka plan surecleri (`&`) ve `SIGCHLD` ile reaping
-- [x] Tek seviyeli pipe (`|`) destegi
-- [ ] Son 10 komut icin history
-- [ ] Performans degerlendirmesi (komut basina sure olcumu, ortalamalar)
