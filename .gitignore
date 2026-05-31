@@ -4,3 +4,4 @@ msh
 *.log
 CLAUDE.md
 .claude/
+*.txt

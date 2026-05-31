@@ -33,6 +33,8 @@ kurmak ve process yaratma + bekleme akışını sağlam bir şekilde oturtmaktı
 - **Loglama**: tüm olaylar `shell.log` dosyasına zaman damgalı yazılır.
   Log yazımı `pthread_mutex` ile korunur; ileride birden fazla
   thread/child aynı anda loga yazsa bile satırlar bozulmaz.
+- **History**: Girilen komutlar halka bir tamponda (ring buffer) tutulur.
+  `history` komutu ile listelenir.
 
 Dosya yapısı:
 
@@ -41,10 +43,12 @@ unix-shell/
 ├── Makefile
 ├── README.md
 ├── include/
+│   ├── history.h
 │   ├── log.h
 │   ├── parser.h
 │   └── executor.h
 └── src/
+    ├── history.c    # komut geçmişi yönetimi
     ├── main.c       # REPL döngüsü
     ├── log.c        # zaman damgalı, mutex'li log dosyası yazımı
     ├── parser.c     # komut satırını argv dizisine ayırma
@@ -98,6 +102,36 @@ birikir; sıfırlamak için `make clean` yeterlidir.
 Bu sürümde manuel test seti:
 
 | # | Komut          | Beklenen davranış                                  |
+|---|----------------|----------------------------------------------------|
+| 1 | `ls`           | `.` dizinini listeler                              |
+| 2 | `ls -l /`      | Kök dizini uzun formatta listeler                  |
+| 3 | `cd /tmp`      | `/tmp` dizinine geçer, prompt değişmez             |
+| 4 | `pwd`          | `/tmp` basar                                       |
+| 5 | `cd`           | `HOME` dizinine döner                              |
+| 6 | `cd ~`         | `HOME` dizinine döner                              |
+| 7 | `cd -`         | Önceki dizine döner (`/tmp`)                       |
+| 8 | `ls | wc -l`   | `ls` çıktısındaki satır sayısını basar             |
+| 9 | `sleep 3 &`    | Arka plana atar, `[pid]` basar, prompt döner       |
+| 10| `history`      | Son 10 komutu numaralı olarak listeler             |
+| 11| `exit`         | Kabuktan çıkar                                     |
+| 12| `exit 123`     | Kabuktan 123 koduyla çıkar                         |
+
+## Performans
+
+`msh`, çalıştırılan her komutun başlangıç ve bitiş zamanını `clock_gettime(CLOCK_MONOTONIC)` kullanarak ölçer. Bu süre milisaniye (ms) cinsinden `shell.log` dosyasına kaydedilir.
+
+Kabuk kapatıldığında (veya `history` komutu çalıştırıldığında), çalıştırılan komutların sayısı, ortalama, minimum ve maksimum çalışma süreleri gibi istatistiksel bir özet ekrana basılır.
+
+Örnek çıktı:
+
+```
+--- Performans Özeti ---
+Calistirilan komut sayisi: 3
+Ortalama calisma suresi: 10.87 ms
+Minimum calisma suresi: 1.12 ms
+Maksimum calisma suresi: 30.45 ms
+------------------------
+```
 |---|----------------|-----------------------------------------------------|
 | 1 | `ls`           | Dizin listelenir, log'a `exit=0` düşer              |
 | 2 | `echo selam`   | "selam" yazılır                                     |

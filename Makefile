@@ -1,5 +1,5 @@
 CC      = gcc
-CFLAGS  = -Wall -Wextra -O2 -std=c11 -Iinclude
+CFLAGS  = -Wall -Wextra -g -std=c11 -Iinclude
 LDFLAGS = -pthread
 
 TARGET  = msh
@@ -7,7 +7,7 @@ SRCDIR  = src
 OBJDIR  = build
 
 SRCS = $(wildcard $(SRCDIR)/*.c)
-OBJS = $(SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
+OBJS = $(patsubst $(SRCDIR)/%.c,$(OBJDIR)/%.o,$(SRCS))
 
 .PHONY: all clean run
 
@@ -26,4 +26,4 @@ run: $(TARGET)
 	./$(TARGET)
 
 clean:
-	rm -rf $(OBJDIR) $(TARGET) shell.log
+	rm -rf $(OBJDIR) $(TARGET) shell.log history.txt
