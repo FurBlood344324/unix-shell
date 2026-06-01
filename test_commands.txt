@@ -6,6 +6,10 @@ cd
 pwd
 cd ~/Desktop
 pwd
+cd -
+pwd
+cd -
+pwd
 yokboyle
 false
 

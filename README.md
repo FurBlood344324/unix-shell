@@ -117,20 +117,21 @@ birikir; sıfırlamak için `make clean` yeterlidir.
 | 8  | `cd`               | `HOME` dizinine döner                                            |
 | 9  | `cd ~`             | `HOME` dizinine döner                                            |
 | 10 | `cd ~/Desktop`     | `HOME/Desktop` dizinine geçer                                    |
-| 11 | `ls \| wc -l`      | `ls` çıktısındaki satır sayısını basar                           |
-| 12 | `echo a \| tr`     | "a" harfini basar                                                |
-| 13 | `\| ls`             | `shell: komut parse edilemedi` hatası, shell kapanmaz            |
-| 14 | `ls \|`             | `shell: komut parse edilemedi` hatası, shell kapanmaz            |
-| 15 | `ls \| cd /tmp`    | cd pipe içinde çalışır, ebeveyn dizini değişmez                  |
-| 16 | `echo \| exit 5`   | pipe içindeki exit sadece çocuk prosesi öldürür                  |
-| 17 | `sleep 3 &`        | Arka plana atar, prompt hemen döner                              |
-| 18 | `sleep 1 &` + log  | Bitince log'a `background process N exited with code 0` düşer    |
-| 19 | `cd /tmp &`        | Built-in background reddedilir, shell çalışmaya devam eder       |
-| 20 | `history`          | Son 10 komutu numaralı olarak listeler                           |
-| 21 | `exit`             | Son komutun çıkış koduyla kapanır                                |
-| 22 | `exit 123`         | 123 koduyla kapanır                                              |
-| 23 | `exit abc`         | "numeric argument required" hatası, shell kapanmaz               |
-| 24 | (boş satır)        | Yeni prompt, hata yok                                           |
+| 11 | `cd -`             | `OLDPWD` (önceki dizin) varsa oraya döner ve yolu yazdırır       |
+| 12 | `ls \| wc -l`      | `ls` çıktısındaki satır sayısını basar                           |
+| 13 | `echo a \| tr`     | "a" harfini basar                                                |
+| 14 | `\| ls`             | `shell: komut parse edilemedi` hatası, shell kapanmaz            |
+| 15 | `ls \|`             | `shell: komut parse edilemedi` hatası, shell kapanmaz            |
+| 16 | `ls \| cd /tmp`    | cd pipe içinde çalışır, ebeveyn dizini değişmez                  |
+| 17 | `echo \| exit 5`   | pipe içindeki exit sadece çocuk prosesi öldürür                  |
+| 18 | `sleep 3 &`        | Arka plana atar, prompt hemen döner                              |
+| 19 | `sleep 1 &` + log  | Bitince log'a `background process N exited with code 0` düşer    |
+| 20 | `cd /tmp &`        | Built-in background reddedilir, shell çalışmaya devam eder       |
+| 21 | `history`          | Son 10 komutu numaralı olarak listeler                           |
+| 22 | `exit`             | Son komutun çıkış koduyla kapanır                                |
+| 23 | `exit 123`         | 123 koduyla kapanır                                              |
+| 24 | `exit abc`         | "numeric argument required" hatası, shell kapanmaz               |
+| 25 | (boş satır)        | Yeni prompt, hata yok                                           |
 
 Hızlı toplu test:
 

@@ -187,16 +187,40 @@ int run_builtin(char **argv, int background)
             last_exit_code = 1;
             return 0;
         }
-        char *target = expand_cd_target(argv[1]);
+
+        char old_cwd[4096];
+        old_cwd[0] = '\0';
+        getcwd(old_cwd, sizeof(old_cwd));
+
+        char *target = NULL;
+
+        if (argv[1] != NULL && strcmp(argv[1], "-") == 0) {
+            target = getenv("OLDPWD");
+            if (target == NULL) {
+                fprintf(stderr, "cd: OLDPWD not set\n");
+                log_msg("ERROR", "cd: OLDPWD not set");
+                last_exit_code = 1;
+                return 0;
+            }
+            printf("%s\n", target);
+            target = strdup(target);
+        } else {
+            target = expand_cd_target(argv[1]);
+        }
+
         if (target == NULL) {
             last_exit_code = 1;
             return 0;
         }
+
         if (chdir(target) < 0) {
             perror("cd");
             last_exit_code = 1;
         } else {
             last_exit_code = 0;
+            if (old_cwd[0] != '\0') {
+                setenv("OLDPWD", old_cwd, 1);
+            }
         }
         free(target);
         return 0;
